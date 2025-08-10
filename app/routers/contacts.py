@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from ..db import SessionLocal
 from .. import models, schemas
 
@@ -19,5 +20,5 @@ async def create_contact(contact: schemas.ContactCreate, db: AsyncSession = Depe
 
 @router.get("/", response_model=list[schemas.ContactOut])
 async def list_contacts(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(models.Contact.__table__.select())
-    return result.scalars().all()
+    res = await db.execute(select(models.Contact))
+    return res.scalars().all()
