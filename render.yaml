@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: ai-crm
+    env: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false   # we’ll paste the value in Render UI
