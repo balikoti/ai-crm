@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .db import engine
-from . import models
+import models
 from .routers import contacts, properties, transactions, search
 
 app = FastAPI(title="Flexible AI CRM", version="0.1.0")
