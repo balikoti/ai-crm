@@ -17,7 +17,7 @@ async def ui_home():
     body { margin: 16px; }
     h1 { margin: 0 0 12px; }
     nav { display:flex; gap:12px; align-items:center; margin:12px 0 16px; flex-wrap: wrap; }
-    .micline { display:flex; gap:8px; flex: 1 1 420px; }
+    .micline { display:flex; gap:8px; flex: 1 1 520px; }
     input[type="text"] { flex:1; padding:10px; border:1px solid #cbd5e1; border-radius:10px; }
     button { padding:10px 12px; border:1px solid #0ea5e9; background:#0ea5e9; color:#fff; border-radius:10px; cursor:pointer; }
     a.btn { padding:10px 12px; border:1px solid #e5e7eb; background:#fff; border-radius:10px; text-decoration:none; color:#111827; }
@@ -31,6 +31,8 @@ async def ui_home():
     .attrs { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; background:#f8fafc; padding:4px 6px; border-radius:6px; }
     .ok { color:#22c55e; }
     .err { color:#ef4444; white-space:pre-wrap; }
+    .pill { display:inline-block; padding:6px 10px; border:1px solid #e5e7eb; border-radius:999px; margin-right:8px; cursor:pointer; background:#fff; }
+    .pill:hover { background:#f1f5f9; }
   </style>
 </head>
 <body>
@@ -40,6 +42,7 @@ async def ui_home():
     <div class="micline">
       <input id="voice_input" type="text" placeholder="Speak or type notes…">
       <button id="mic_btn" title="Voice to text">🎤</button>
+      <button id="submit_btn" title="Submit">↩︎ Submit</button>
     </div>
     <a class="btn" href="#contacts">Contacts</a>
     <a class="btn" href="#properties">Properties</a>
@@ -48,6 +51,7 @@ async def ui_home():
   </nav>
 
   <div id="status" class="muted" style="margin-bottom:12px;"></div>
+  <div id="ingest_box" class="muted" style="margin:8px 0 16px;"></div>
 
   <div class="grid">
     <!-- Contacts -->
@@ -152,6 +156,8 @@ async def ui_home():
   <script>
     const $ = (id) => document.getElementById(id);
     const statusEl = $("status");
+    const ingestBox = $("ingest_box");
+    let lastDraft = null; // stored client-side to confirm later
 
     async function ping() {
       try {
@@ -165,6 +171,16 @@ async def ui_home():
     // Voice to Text (Web Speech API)
     (function setupMic(){
       const btn = $("mic_btn");
+      const input = $("voice_input");
+      const submit = $("submit_btn");
+
+      // Enter key submits
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); submitIngest(); }
+      });
+
+      submit.onclick = submitIngest;
+
       if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
         btn.disabled = true; btn.title = "Voice not supported by this browser";
         return;
@@ -182,17 +198,93 @@ async def ui_home():
       };
       rec.onresult = (e) => {
         const text = e.results[0][0].transcript;
-        $("voice_input").value = text;
+        input.value = text;
+        submitIngest();
       };
       rec.onend = () => { listening = false; btn.textContent = "🎤"; };
       rec.onerror = () => { listening = false; btn.textContent = "🎤"; };
     })();
 
+    // ---- Ingest flow ----
+    async function submitIngest() {
+      const text = $("voice_input").value.trim();
+      if (!text) { return; }
+      ingestBox.textContent = "Thinking…";
+      lastDraft = null;
+
+      try {
+        const res = await fetch("/ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text })
+        });
+        const data = await res.json();
+        handleIngestResponse(data);
+      } catch (e) {
+        ingestBox.innerHTML = '<span class="err">Failed to ingest</span>';
+      }
+    }
+
+    function handleIngestResponse(data) {
+      if (data.status === "created") {
+        ingestBox.innerHTML = `<span class="ok">Created ${data.entity} #${data.id}</span>`;
+        refreshAll();
+        $("voice_input").value = "";
+        lastDraft = null;
+        return;
+      }
+      if (data.status === "ask") {
+        lastDraft = data.draft || null;
+        const options = (data.options || []).map(opt =>
+          `<span class="pill" onclick="confirmIngest('${opt}')">${opt}</span>`
+        ).join("");
+        ingestBox.innerHTML = `<strong>${data.question}</strong><div style="margin-top:8px;">${options}</div>`;
+        return;
+      }
+      ingestBox.textContent = "Unexpected response.";
+    }
+
+    async function confirmIngest(choice) {
+      if (choice === "cancel") { ingestBox.textContent = "Cancelled."; lastDraft = null; return; }
+      if (!lastDraft) { ingestBox.textContent = "No draft to confirm."; return; }
+
+      // If user picked "transaction" but we lack IDs, prompt quickly
+      if (choice === "transaction" && (!lastDraft.contact_id || !lastDraft.property_id)) {
+        const c = prompt("Transaction needs contact_id. Enter number:");
+        const p = prompt("Transaction needs property_id. Enter number:");
+        if (!c || !p) { ingestBox.textContent = "Missing IDs. Cancelled."; return; }
+        lastDraft.contact_id = Number(c);
+        lastDraft.property_id = Number(p);
+      }
+
+      try {
+        const res = await fetch("/ingest/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ choice, draft: lastDraft })
+        });
+        const data = await res.json();
+        if (data.status === "created") {
+          ingestBox.innerHTML = `<span class="ok">Created ${data.entity} #${data.id}</span>`;
+          refreshAll();
+          $("voice_input").value = "";
+          lastDraft = null;
+        } else if (data.status === "cancelled") {
+          ingestBox.textContent = "Cancelled.";
+          lastDraft = null;
+        } else {
+          ingestBox.innerHTML = '<span class="err">Could not create item.</span>';
+        }
+      } catch (e) {
+        ingestBox.innerHTML = '<span class="err">Confirm failed.</span>';
+      }
+    }
+
+    // ---- Helpers for tables ----
     function safeJSON(text) {
       if (!text || !text.trim()) return {};
       try { return JSON.parse(text); } catch (e) { alert("Attrs must be valid JSON"); throw e; }
     }
-
     function tbl(rows, headers) {
       if (!rows.length) return '<div class="muted">No rows</div>';
       let thead = "<tr>" + headers.map(h=>`<th>${h}</th>`).join("") + "</tr>";
@@ -306,13 +398,15 @@ async def ui_home():
       await loadDocuments();
     }
 
+    function refreshAll() {
+      loadContacts(); loadProperties(); loadTransactions(); loadDocuments();
+    }
+
     // Init
     ping();
-    loadContacts();
-    loadProperties();
-    loadTransactions();
-    loadDocuments();
+    refreshAll();
   </script>
 </body>
 </html>
 """
+
