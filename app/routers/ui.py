@@ -82,7 +82,7 @@ async def ui_home():
       </div>
       <div class="row">
         <input id="p_city" placeholder="City" />
-        <input id="p_state" placeholder "State/Province" />
+        <input id="p_state" placeholder="State/Province" />
       </div>
       <div class="row">
         <input id="p_country" placeholder="Country (default Canada)" />
